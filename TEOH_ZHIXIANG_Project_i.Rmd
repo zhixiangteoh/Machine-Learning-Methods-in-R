@@ -1,0 +1,448 @@
+---
+title: "CS 1675 Final Project"
+subtitle: "Introduction and Part i Exploration"
+author: "Teoh Zhixiang"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load packages
+
+```{r, load_packages}
+library(tidyverse)
+```
+
+## Introduction
+
+Complex systems in our everyday lives are almost always made up of several steps or operations that must be performed sequentially. Some examples are manufacturing processes like building an electronic product, which comprises gathering raw materials, then going through a sequential process of steps involving separating and modifying raw materials, to develop an intermediate product, which later goes through another series of sequential steps before the final product is manufactured. In the medical field, an example of such a complex system of processes is drug testing, what with the current COVID-19 pandemic the world is facing. In the aviation industry, production of jet engine components is one such complex system, wherein a series of steps are performed to produce a jet engine component from raw materials.
+
+Given that we are concerned with applications of machine learning in the real world, this project aims to provide insights into such potential real-world applications, through training a regression model, using several methods, then using these models to predict a final binary response.
+
+## Overview
+
+In this project, we are provided with `11` continuous inputs `x01` to `x11`, `2` categorical inputs `xA` and `xB`, and `1` intermediate response, `response_1`. Our primary aim is to optimize the complex system, and **identify the important input variables that minimize the probability that the component will fail the inspection** — these inputs would then represent the **best input settings to use on the machines in each step of the manufacturing process**.
+
+This project will delve into two main approaches to building a binary classifier to predict if the component will fail the inspection: 
+
+a. considering all `11` continuous and `2` categorical inputs as the inputs to the binary classifier, and 
+b. considering `response_1` as an input along with the `5` continuous inputs `x07` to `x11`, and `2` categorical inputs.
+
+This investigation is divided into `5` main parts:
+
+i. **Exploration**
+ii. Regression models
+iii. Binary classification option b
+iv. Binary classification option a
+v. Interpretation and optimization
+
+This first R Markdown file tackles part i, specifically visualizing the data. 
+
+## Final project data
+
+The code chunk below reads in the data for this project.  
+
+```{r, read_glimpse_data}
+data_url <- 'https://raw.githubusercontent.com/jyurko/CS_1675_Fall_2020/master/HW/final_project/cs_1675_final_project_data.csv'
+
+df <- readr::read_csv(data_url, col_names = TRUE)
+```
+
+Get a glimpse of the data.  
+
+```{r, check_glimpse}
+df %>% glimpse()
+```
+
+Notice the `outcome_2` response variable is binary - either `"Pass"` or `"Fail"`. Separate the variables associated with Step 1.  
+
+```{r, make_step_1_data}
+step_1_df <- df %>% select(xA, xB, x01:x06, response_1)
+
+step_1_df
+```
+
+Separate the variables associated with the Option B classification formulation. Notice that the `outcome_2` variable is converted to a factor with a specific ordering of the levels. Use this ordering when modeling in `caret` to make sure everyone predicts the `Fail` class as the "positive" class in the confusion matrix. Also note that only `5` if the `11` continuous variables, `x07` to `x11`, are included.  
+
+```{r, make_step_2_option_b_data}
+step_2_b_df <- df %>% select(xA, xB, response_1, x07:x11, outcome_2) %>% 
+  mutate(outcome_2 = factor(outcome_2, levels = c("Fail", "Pass")))
+
+step_2_b_df
+```
+
+Separate the variables associated with the Option A classification formulation. The `outcome_2` variable is again converted to a factor with a specific ordering of the levels - specifically that `Fail` corresponds to the "positive" class.
+
+```{r, make_step_2_option_a_data}
+step_2_a_df <- df %>% select(xA, xB, x01:x11, outcome_2) %>% 
+  mutate(outcome_2 = factor(outcome_2, levels = c("Fail", "Pass")))
+
+step_2_a_df
+```
+
+## Exploratory Data Analysis
+
+As in any exploratory data analysis procedure, our two main guiding questions are: 
+
+1. What type of variation occurs *within* my variables?
+2. What type of **covariation** occurs *between* my variables?
+
+### Variation within variables
+
+Let's first visualize the distribution of the individual variables in the data set, tackling the first guiding question.
+
+```{r, distribution_of_variable_outcome_2}
+df %>% ggplot(mapping = aes(outcome_2)) +
+  geom_bar()
+
+df %>% count(outcome_2)
+```
+
+We note that the `outcome_2` response is more or less evenly split between the `Fail` ("positive") and `Pass` ("negative") classes.
+
+```{r, distribution_of_variable_xA}
+df %>% ggplot(mapping = aes(xA)) +
+  geom_bar()
+
+df %>% count(xA)
+```
+
+`xA` is a categorical variable of two classes, `A1` and `A2`, with a higher proportion of `A2`.
+
+```{r, distribution_of_variable_xB}
+df %>% ggplot(mapping = aes(xB)) +
+  geom_bar()
+
+df %>% count(xB)
+```
+
+`xB` is a categorical variable of four classes, `B1` to `B4`, with higher proportions of `B2` and `B3`.
+
+Visualizing distributions of variables `x01` to `x06`.
+
+```{r, distribution_of_variables_x01_to_x06}
+step_1_df %>% tibble::rowid_to_column() %>% 
+  tidyr::gather(key = "key", value = "value", -rowid, -response_1, -xA, -xB) %>% 
+  mutate(input_number = as.numeric(stringr::str_extract(key, "\\d+"))) %>% 
+  ggplot(mapping = aes(x = value)) +
+  geom_histogram(bins = 31) +
+  facet_wrap(~input_number, scales = "free") +
+  theme_bw() +
+  theme(axis.text.y = element_blank())
+```
+
+All inputs model normal distributions.
+
+```{r, distribution_of_variable_x01}
+df %>% ggplot(mapping = aes(x01)) +
+  geom_histogram(bins = 30)
+```
+
+```{r, distribution_of_variable_x02}
+df %>% ggplot(mapping = aes(x02)) +
+  geom_histogram(bins = 30, fill = 2, alpha = 0.5)
+```
+
+```{r, distribution_of_variable_x03}
+df %>% ggplot(mapping = aes(x03)) +
+  geom_histogram(bins = 30, fill = 3, alpha = 0.5)
+```
+
+Use boxplots to summarize inputs `x01` to `x06`.
+
+```{r, boxplot_x01_to_x06}
+step_1_df %>% tibble::rowid_to_column() %>% 
+  tidyr::gather(key = "key", value = "value", -rowid, -response_1, -xA, -xB) %>% 
+  mutate(input_number = as.numeric(stringr::str_extract(key, "\\d+"))) %>% 
+  ggplot(mapping = aes(x = input_number, y = value)) +
+  geom_boxplot(mapping = aes(group = input_number)) +
+  theme_bw()
+```
+
+<!-- Overlapping `geom_histogram` to display distributions of continuous variables `x01` to `x06`: -->
+
+<!-- ```{r, distribution_of_variable_continuous_1} -->
+<!-- df %>%  -->
+<!--   ggplot() + -->
+<!--   geom_histogram(aes(x01), bins = 100, alpha = 0.5, fill = 1) + # grey -->
+<!--   geom_histogram(aes(x02), bins = 100, alpha = 0.5, fill = 2) + # red -->
+<!--   geom_histogram(aes(x03), bins = 100, alpha = 0.5, fill = 3) + # green -->
+<!--   geom_histogram(aes(x04), bins = 100, alpha = 0.5, fill = 4) + # blue -->
+<!--   geom_histogram(aes(x05), bins = 100, alpha = 0.5, fill = 5) + # cyan -->
+<!--   geom_histogram(aes(x06), bins = 100, alpha = 0.5, fill = 6) + # pink -->
+<!--   labs(x = "x") -->
+<!-- ``` -->
+
+<!-- Looking more closely at `x06`'s distribution: -->
+
+<!-- ```{r, distribution_of_variable_x06} -->
+<!-- df %>%  -->
+<!--   ggplot() + -->
+<!--   geom_histogram(aes(x11), bins = 30, alpha = 0.5, fill = 6) -->
+<!-- ``` -->
+
+Visualizing distributions of variables `x07` to `x11`.
+
+```{r}
+step_2_b_df %>% tibble::rowid_to_column() %>% 
+  tidyr::gather(key = "key", value = "value", -rowid, -outcome_2, -response_1, -xA, -xB) %>% 
+  mutate(input_number = as.numeric(stringr::str_extract(key, "\\d+"))) %>% 
+  ggplot(mapping = aes(x = value)) +
+  geom_histogram(bins = 31) +
+  facet_wrap(~input_number, scales = "free") +
+  theme_bw() +
+  theme(axis.text.y = element_blank())
+```
+
+All inputs follow normal distributions.
+
+<!-- Overlapping `geom_histogram` to display distributions of continuous variables `x07` to `x11`: -->
+
+<!-- ```{r, distribution_of_variable_continuous_2} -->
+<!-- df %>%  -->
+<!--   ggplot() + -->
+<!--   geom_histogram(aes(x07), bins = 100, alpha = 0.5, fill = 1) + # grey -->
+<!--   geom_histogram(aes(x08), bins = 100, alpha = 0.5, fill = 2) + # red -->
+<!--   geom_histogram(aes(x09), bins = 100, alpha = 0.5, fill = 3) + # green -->
+<!--   geom_histogram(aes(x10), bins = 100, alpha = 0.5, fill = 4) + # blue -->
+<!--   geom_histogram(aes(x11), bins = 100, alpha = 0.5, fill = 5) + # cyan -->
+<!--   labs(x = "x") -->
+<!-- ``` -->
+
+<!-- Look more closely at `x11`'s distribution: -->
+
+<!-- ```{r, distribution_of_variable_x11} -->
+<!-- df %>%  -->
+<!--   ggplot() + -->
+<!--   geom_histogram(aes(x11), bins = 30, alpha = 0.5, fill = 5) -->
+<!-- ``` -->
+
+Visualizing distribution of `response_1` intermediate response variable:
+
+```{r, distribution_of_variable_response_1}
+df %>% 
+  ggplot(mapping = aes(response_1)) +
+  geom_histogram(bins = 30)
+```
+
+We note that all of the continuous inputs follow some form of normal distribution. Up to this point, we have visualized only the individual inputs' variation, without influence from other inputs.
+
+### Continuous, categorically
+
+Because we have two categorical inputs `xA` and `xB`, we will take a step further and visualize the differences, if any, in the variation of continuous inputs when grouped by the categorical inputs.
+
+First, we plot the distribution of `x01` with `xA`, using `geom_freqpoly`.
+
+```{r, distribution_of_variable_x01_with_xA}
+df %>% ggplot(mapping = aes(x01, y = ..density.., color = xA)) +
+  geom_freqpoly(bins = 30)
+```
+
+From the above overlain histogram it is apparent that `x01` follows a normal distribution for both the `xA` categories, `A1` and `A2`. It is expected that `A2` has higher counts because we saw that `A2` has a higher proportion than `A1` in the `xA` variable, so we have plotted `density` here.
+
+```{r, distribution_of_variable_x02_with_xA}
+df %>% ggplot(mapping = aes(x02, y = ..density.., color = xA)) +
+  geom_freqpoly(bins = 30)
+```
+
+Similarly, for `x02`, and perhaps all `x03:x11` inputs, the same conclusions can be gathered, since all follow normal distributions.
+
+Next, we plot the distribution of `x01` with `xB`, using `geom_freqpoly`.
+
+```{r, distribution_of_variable_x01_with_xB}
+df %>% ggplot(mapping = aes(x01, y = ..density.., color = xB)) +
+  geom_freqpoly(bins = 30)
+```
+
+Here, likewise we observe that the `x01` input follows normal distribution in all four `xB` categories. We extend this observation to all `x02:x11` inputs.
+
+We also want to visualize the `response_1` continuous variable based on the discrete groups `xA` and `xB`.
+
+```{r, distribution_of_variable_response_1_with_xAxB}
+df %>% ggplot(mapping = aes(response_1, y = ..density.., color = xA)) +
+  geom_freqpoly(bins = 30)
+
+df %>% ggplot(mapping = aes(response_1, y = ..density.., color = xB)) +
+  geom_freqpoly(bins = 30)
+```
+
+The distribution for `response_1` based on `xA` is similar to that of the inputs and follow normal distribution in both categories. The distribution based on `xB` yields a similar observation, except that `B2` has the highest density. This leads us to believe that `B2` leads to the highest probability in `response_1`.
+
+### Covariation between variables
+
+Now that we have visualized the variations (by way of distributions) of the individual input variables `x01:x11`, intermediate response `response_1`, and the categorical inputs, we want to get a sense of whether there are any relations between the input variables between the Step 1 inputs (`x01:x06`) and Step 2 inputs (`x07:x11` or `x01:x11`), as well as between the outputs and inputs, in this case specifically between `response_1` and Step 1 inputs; and between `outcome_2` and Step 2 inputs, and `outcome_2` and `response_1`.
+
+First, let's first visualize the relationship between the two categorical variables, `xA` and `xB`.
+
+```{r, covariation_of_xA_xB}
+### using built-in geom_count()
+df %>% 
+  ggplot() +
+  geom_count(mapping = aes(x = xA, y = xB))
+
+### using geom_tile()
+df %>% 
+  count(xA, xB) %>% 
+  ggplot(mapping = aes(x = xA, y = xB)) +
+  geom_tile(mapping = aes(fill = n))
+```
+
+There doesn't seem to be much of a "pattern" or "trend" here, other than that `A2`, `B2`, `B3` correspond to the highest proportions.
+
+Let's visualize the relationships between inputs, `x01:x11`.
+
+```{r, covariance_of_x01_x02}
+step_1_df %>% 
+  ggplot(mapping = aes(x01, x02)) +
+  geom_point(alpha = 0.5)
+```
+
+```{r, covariance_of_x03_x06}
+step_1_df %>% 
+  ggplot(mapping = aes(x03, x06)) +
+  geom_point(alpha = 0.5)
+```
+
+```{r, covariance_of_x07_x08}
+step_2_b_df %>% 
+  ggplot(mapping = aes(x07, x08)) +
+  geom_point(alpha = 0.5)
+```
+
+Visualize the relationship between `response_1` and Step 1 inputs (`x01:x06`).
+
+```{r, covariance_of_response_1_step_1}
+step_1_df %>% 
+  ggplot(mapping = aes(x01, response_1)) +
+  geom_point()
+
+step_1_df %>% 
+  ggplot(mapping = aes(x02, response_1)) +
+  geom_point()
+
+step_1_df %>% 
+  ggplot(mapping = aes(x03, response_1)) +
+  geom_point()
+
+step_1_df %>% 
+  ggplot(mapping = aes(x04, response_1)) +
+  geom_point()
+
+step_1_df %>% 
+  ggplot(mapping = aes(x05, response_1)) +
+  geom_point()
+
+step_1_df %>% 
+  ggplot(mapping = aes(x06, response_1)) +
+  geom_point()
+```
+
+Visualize the relationship between `outcome_2` and Step 2 inputs (`x07:x11` or `x01:x11`). This is between a continuous and categorical input. Because we have noted that `outcome_2` is more or less evenly distributed, we can plot against `count`, as per default settings.
+
+```{r, covariance_of_outcome_2_step_2}
+### x01:x04
+step_2_a_df %>% 
+  ggplot(mapping = aes(x01, color = outcome_2)) +
+  geom_freqpoly(bins = 30)
+
+step_2_a_df %>% 
+  ggplot(mapping = aes(x02, color = outcome_2)) +
+  geom_freqpoly(bins = 30)
+
+step_2_a_df %>% 
+  ggplot(mapping = aes(x03, color = outcome_2)) +
+  geom_freqpoly(bins = 30)
+
+step_2_a_df %>%
+  ggplot(mapping = aes(x04, color = outcome_2)) +
+  geom_freqpoly(bins = 30)
+
+### x07:x09
+step_2_a_df %>% 
+  ggplot(mapping = aes(x07, color = outcome_2)) +
+  geom_freqpoly(bins = 30)
+
+step_2_a_df %>% 
+  ggplot(mapping = aes(x08, color = outcome_2)) +
+  geom_freqpoly(bins = 30)
+
+step_2_a_df %>% 
+  ggplot(mapping = aes(x09, color = outcome_2)) +
+  geom_freqpoly(bins = 30)
+```
+
+We note that for `x01:x04`, `x07:09`, higher proportions of inputs are associated with `Pass` ("negative") outcomes.
+
+Break up boxplot of `x01` to `x11` based on observed output `outcome_2`.
+
+```{r, boxplot_by_outcome_2}
+step_2_a_df %>% tibble::rowid_to_column() %>% 
+  tidyr::gather(key = "key", value = "value", -rowid, -xA, -xB, -outcome_2) %>% 
+  mutate(input_number = as.numeric(stringr::str_extract(key, "\\d+"))) %>% 
+  ggplot(mapping = aes(x = input_number, y = value)) +
+  geom_boxplot(mapping = aes(group = interaction(input_number, outcome_2),
+                             fill = outcome_2)) +
+  scale_fill_brewer(palette = "Set1") +
+  theme_bw()
+```
+
+Check for multimodal behavior using violin plots.
+
+```{r, violin_x01_to_x11}
+step_2_a_df %>% tibble::rowid_to_column() %>% 
+  tidyr::gather(key = "key", value = "value", -rowid, -xA, -xB, -outcome_2) %>% 
+  mutate(input_number = as.numeric(stringr::str_extract(key, "\\d+"))) %>% 
+  ggplot(mapping = aes(x = input_number, y = value)) +
+  geom_violin(mapping = aes(group = interaction(input_number, outcome_2),
+                            fill = outcome_2)) +
+  facet_grid(outcome_2 ~ .) +
+  scale_fill_brewer(guide = FALSE, palette = "Set1") +
+  theme_bw()
+```
+
+Check input correlation structure.
+
+```{r, input_correlation_general}
+step_2_a_df %>% 
+  select(-xA, -xB, -outcome_2) %>% 
+  cor() %>% 
+  corrplot::corrplot(method = "square", type = "upper")
+```
+
+```{r, covariance_of_outcome_2_response_1}
+step_2_b_df %>% 
+  ggplot(mapping = aes(response_1, color = outcome_2)) +
+  geom_freqpoly(bins = 30)
+```
+
+We observe that a higher proportion of `response_1` have a `Pass` ("negative") outcome than `Fail` ("positive") outcome.
+
+## Saving 
+
+<!-- Let's go ahead and save `mod01`. There are multiple approaches for saving objects including `.Rda` and `.rds`. I prefer to use the `.rds` object because it's more streamlined and makes it easier to save and reload a single object, which in our case is a model object. We can use the base `R` `saveRDS()` function or the `tidyverse` equivalent `write_rds()` function from the `readr` package. I prefer to use the `tidyverse` version.   -->
+
+<!-- The code chunk below pipes the `mod01` object into `readr::write_rds()`. It saves the object to a file in the local working directory for simplicity. Notice that the `.rds` extension is included after the desired file name.   -->
+
+
+```{r, save_data}
+df %>% readr::write_rds("df.rds")
+step_1_df %>% readr::write_rds("step_1_df.rds")
+step_2_a_df %>% readr::write_rds("step_2_a_df.rds")
+step_2_b_df %>% readr::write_rds("step_2_b_df.rds")
+```
+
+<!-- If you ran the above code chunk, check your working directory with the Files tab. You should see the `my_simple_example_model.rds` in your current working directory.   -->
+
+<!-- Let's now load in that model, but assign it to a different variable name. We can read in an `.rds` file with the  -->
+
+<!-- ```{r, load_back_the_model} -->
+<!-- re_load_mod01 <- readr::read_rds("my_simple_example_model.rds") -->
+<!-- ``` -->
+
+<!-- We can now work with the `re_load_mod01` object just like the original model we fit, `mod01`. So we can use `summary()` and another other function on the model object, like `predict()`. To confirm let's print out the summary below.   -->
+
+<!-- ```{r, check_model_summary} -->
+<!-- re_load_mod01 %>% summary() -->
+<!-- ``` -->

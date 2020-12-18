@@ -1,0 +1,172 @@
+---
+title: "CS 1675 Final Project"
+subtitle: "Part v Interpretation and optimization"
+author: "Teoh Zhixiang"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load packages and data
+
+```{r, load_packages}
+library(tidyverse)
+library(caret)
+```
+
+
+```{r, load_data}
+df <- readr::read_rds("df.rds")
+step_2_b_df <- readr::read_rds("step_2_b_df.rds")
+step_2_a_df <- readr::read_rds("step_2_a_df.rds")
+iii_models <- readr::read_rds("iii_models.rds")
+iv_models <- readr::read_rds("iv_models.rds")
+```
+
+## Overview
+
+i. Exploration
+ii. Regression models
+iii. Binary classification option b 
+iv. Binary classification option a
+v. **Interpretation and optimization**
+
+This R Markdown file tackles part v, specifically evaluating the results from parts iii and iv, identifying the most important variables associated with the best performing models, visualizing the probability of failure as a function of the identified most important variables, and determining, based on visualizations, the input settings associated with minimizing the failure probability.
+
+## General
+
+## Evaluating `response_1` as a feature
+
+### ROC
+
+First compare the results between the two best performing models from parts iii and iv, based on AUC.
+
+```{r, compare_best_models_iii_iv}
+results <- resamples(list(iii_rf = iii_models$iii_rf,
+                          iii_xgb = iii_models$iii_xgb,
+                          iv_rf = iv_models$iv_rf,
+                          iv_xgb = iv_models$iv_xgb))
+```
+
+Then we visually compare the performance metrics.
+
+```{r, results_dotplot}
+dotplot(results)
+
+dotplot(results, metric = "ROC")
+dotplot(results, metric = "Sens")
+dotplot(results, metric = "Spec")
+```
+
+Based on AUC, the models including `response_1` as a feature yield better performance in predicting `outcome_2`, as observable from the higher `ROC` values for both `iii_rf` and `iii_xgb`.
+
+### Accuracy
+
+```{r, compare_accuracy_iii_iv}
+calc_accuracy <- function(model) {
+  cf <- confusionMatrix.train(model)
+  
+  return( (cf$table[1,1] + cf$table[2,2]) / 100 )
+}
+
+models <- list(iii_rf = iii_models$iii_rf,
+               iii_xgb = iii_models$iii_xgb,
+               iv_rf = iv_models$iv_rf,
+               iv_xgb = iv_models$iv_xgb)
+
+accuracy_results <- purrr::map_dbl(models, calc_accuracy)
+
+accuracy_results %>% sort(decreasing = TRUE)
+```
+
+Based on Accuracy, including `response_1` as a feature yield slightly better performance for the best performing model `iv_rf`, but slightly worse for `iv_xgb`.
+
+## Variable importance
+
+### Models with `response_1` as a feature
+
+```{r, varImp_rf}
+plot(varImp(iii_models$iii_rf))
+```
+
+Plot variable importance based on `xgb` model.
+
+```{r, varImp_xgb}
+plot(varImp(iii_models$iii_xgb))
+```
+
+`x07`, `x08` and `response_1` seem to be the three most important inputs.
+
+### Models without `response_1` as a feature
+
+```{r, varImp_rf_iv}
+plot(varImp(iv_models$iv_rf))
+```
+
+Plot variable importance based on `xgb` model.
+
+```{r, varImp_xgb_iv}
+plot(varImp(iv_models$iv_xgb))
+```
+
+`x07` and `x08` seem to be the two most important inputs.
+
+### Summary
+
+In general, inputs `x07`, `x08` seem to be the most importance variables. `response_1` is also an important variable for the models including `response_1` as one of the features.
+
+## Partial dependence - visualizing `Fail` probability against most important variables
+
+```{r, load_pdp, eval=TRUE}
+library(pdp)
+```
+
+```{r, prob_x07}
+# Custom prediction function wrapper
+# pdp_pred <- function(object, newdata)  {
+#   results <- mean(as.vector(predict(object, newdata)))
+#   return(results)
+# }
+
+# Compute partial dependence values
+pd_values_x07 <- partial(
+  iii_models$iii_rf,
+  train = step_2_b_df, 
+  pred.var = "x07"
+)
+
+head(pd_values_x07)  # take a peak
+
+# Partial dependence plot
+autoplot(pd_values_x07)
+```
+
+```{r, prob_x08}
+# Compute partial dependence values
+pd_values_x08 <- partial(
+  iii_models$iii_rf,
+  train = step_2_b_df, 
+  pred.var = "x08"
+)
+
+head(pd_values_x08)  # take a peak
+
+# Partial dependence plot
+autoplot(pd_values_x08)
+```
+
+## Input settings to minimize `Fail` probability
+
+Find the optimal settings for `x07` and `x08` to minimize `Fail` probability, from partial dependence calculations.
+
+```{r, x07_min_Fail}
+pd_values_x07 %>% as_tibble() %>% filter(pd_values_x07$yhat == min(pd_values_x07$yhat)) %>% select(x07)
+```
+
+```{r, x08_min_Fail}
+pd_values_x08 %>% as_tibble() %>% filter(pd_values_x08$yhat == min(pd_values_x08$yhat)) %>% select(x08)
+```
+
+<!-- ## Optimizing inputs for 2 discrete groups using `optim()` -->

@@ -1,0 +1,741 @@
+---
+title: "CS 1675 Final Project"
+subtitle: "Part iv Binary classification Option A"
+author: "Teoh Zhixiang"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load packages and data
+
+```{r, load_packages}
+library(tidyverse)
+```
+
+
+```{r, load_data}
+df <- readr::read_rds("df.rds")
+step_2_a_df <- readr::read_rds("step_2_a_df.rds")
+iii_models <- readr::read_rds("iii_models.rds")
+```
+
+## Overview
+
+i. Exploration
+ii. Regression models
+iii. Binary classification option b 
+iv. **Binary classification option a**
+v. Interpretation and optimization
+
+This R Markdown file tackles part iv, specifically training, evaluating, tuning, and comparing models for the binary classifier `outcome_2` as a function of `xA`, `xB`, `x01:x11`.
+
+We will use the `caret` package to handle training, testing, and evaluation.
+
+```{r, load_caret, eval=TRUE}
+library(caret)
+```
+
+## General
+
+Throughout all methods, we will use 5-fold cross validation, as our resampling method, by specifying `"repeatedcv"` as the `method` argument to a `caret::trainControl()`. For this classification problem, we will use the Area under the `ROC` curve as our primary performance metric. We must specify the `summaryFunction` argument to be `twoClassSummary` within the `trainControl()` function in order to maximize the area under the ROC curve. We will also instruct `caret` to return the class predicted probabilities.
+
+```{r, general_settings}
+my_ctrl <- caret::trainControl(method = "repeatedcv", 
+                               number = 5, 
+                               repeats = 5, 
+                               savePredictions = TRUE, 
+                               summaryFunction = twoClassSummary, 
+                               classProbs = TRUE)
+roc_metric <- "ROC"
+```
+
+## Logistic regression with additive terms
+
+First we will train a logistic regression model with additive terms, using `method = "glm"` in `caret::train`. We will train the model for `outcome_2` as a function of `xA`, `xB`, `x01:x11`.
+
+The main purpose of this logistic regression model is to provide a baseline comparison to the other complex models we will train.
+
+```{r, mod_glm}
+set.seed(12345)
+mod_glm <- caret::train(outcome_2 ~ .,
+                        method = "glm", 
+                        metric = roc_metric, 
+                        trControl = my_ctrl,
+                        preProcess = c("center", "scale"),
+                        data = step_2_a_df)
+
+mod_glm
+```
+
+Look at confusion matrix associated with the `mod_glm` model.
+
+```{r, mod_glm_confusionMatrix}
+confusionMatrix.train(mod_glm)
+```
+
+## Regularized regression with elastic net
+
+We now try a regularization approach. Elastic net is a mixture between Lasso and Ridge penalties. We will train two different models with interactions, specifically one with all pair interactions between all `step_2_a_df` input variables, and one with all triplet interactions.
+
+### All pair interactions
+
+Let's first fit a regularized regression model with elastic net, on all pairwise interactions between all `step_2_a_df` inputs, using `caret::train` with `method="glmnet"`. We specify centering and scaling as preprocessing steps.
+
+```{r, mod_glmnet_2}
+set.seed(12345)
+mod_glmnet_2 <- caret::train(outcome_2 ~ (.)^2,
+                             method = "glmnet",
+                             preProcess = c("center", "scale"),
+                             metric = roc_metric,
+                             trControl = my_ctrl,
+                             data = step_2_a_df)
+
+mod_glmnet_2
+```
+
+Create a custom tuning grid `enet_grid` to try out many possible values of the penalty factor (`lambda`) and the mixing fraction (`alpha`).
+
+```{r, enet_grid}
+enet_grid <- expand.grid(alpha = seq(0.1, 0.9, by = 0.1),
+                         lambda = exp(seq(-6, 0.5, length.out = 25)))
+```
+
+Now retrain the pairwise interactions model using `tuneGrid = enet_grid`.
+
+```{r, mod_glmnet_2_b}
+set.seed(12345)
+mod_glmnet_2_b <- caret::train(outcome_2 ~ (.)^2,
+                               method = "glmnet",
+                               preProcess = c("center", "scale"),
+                               tuneGrid = enet_grid,
+                               metric = roc_metric,
+                               trControl = my_ctrl,
+                               data = step_2_a_df)
+
+mod_glmnet_2_b
+```
+
+Print out the non-zero coefficients, specifying the optimal value of lambda identified by resampling.
+
+```{r}
+coef(mod_glmnet_2_b$finalModel, s = mod_glmnet_2_b$bestTune$lambda) %>% 
+  as.matrix() %>% 
+  as.data.frame() %>% 
+  tibble::rownames_to_column("coef_name") %>% 
+  tibble::as_tibble() %>% 
+  purrr::set_names(c("coef_name", "coef_value")) %>%
+  filter(coef_value != 0)
+```
+
+Visualize trends of metric AUC with respect to mixing percentage `alpha` and regularization parameter `lambda`, for model trained with our defined `enet_grid`.
+
+```{r, mod_glmnet_2_b_plot}
+plot(mod_glmnet_2_b, xTrans = log)
+```
+
+### All triplet interactions
+
+Now fit a regularized regression model with elastic net, on all triplet interactions between all `step_2_a_df` inputs, using `tuneGrid = enet_grid`, then displaying the optimal tuning parameters. 
+
+**Warning: The code chunk below takes more than a few minutes to run to completion.**
+
+```{r, mod_glmnet_3_b}
+set.seed(12345)
+mod_glmnet_3_b <- caret::train(outcome_2 ~ (.)^3,
+                               method = "glmnet",
+                               preProcess = c("center", "scale"),
+                               tuneGrid = enet_grid,
+                               metric = roc_metric,
+                               trControl = my_ctrl,
+                               data = step_2_a_df)
+
+mod_glmnet_3_b$bestTune
+```
+
+Check number of coefficients:
+
+```{r, mod_glmnet_3_b_check_coef}
+# number of coefficients
+mod_glmnet_3_b$coefnames %>% length()
+
+# check
+(model.matrix(outcome_2 ~ (.)^3, data = step_2_a_df) %>% colnames() %>% length() - 1) - (mod_glmnet_3_b$coefnames %>% length())
+```
+
+Visualize trends of metric AUC with respect to mixing percentage `alpha` and regularization parameter `lambda`, for model trained with our defined `enet_grid`.
+
+```{r, mod_glmnet_3_b_plot}
+plot(mod_glmnet_3_b, xTrans = log)
+```
+
+### Compare
+
+Compare resampling results across the two different models.
+
+```{r, glmnet_compare}
+glmnet_results <- resamples(list(glmnet_2way = mod_glmnet_2_b,
+                                 glmnet_3way = mod_glmnet_3_b))
+
+dotplot(glmnet_results)
+```
+
+Check confusionMatrix for both models. `glmnet_2_b`:
+
+```{r, mod_glmnet_3_b_confusionMatrix}
+confusionMatrix.train(mod_glmnet_2_b)
+```
+
+`glmnet_3_b`:
+
+```{r, mod_glmnet_2_b_confusionMatrix}
+confusionMatrix.train(mod_glmnet_3_b)
+```
+
+## Partial least squares
+
+As described in Dr Yurko's Ionosphere Caret Demo, "partial least squares (PLS) models are particularly well suited when the inputs are highly correlated to each other". Although our EDA did not reveal any particularly interesting correlations between inputs like there are in the Ionosphere dataset, we can still try PLS to see how well the model performs for the `step_2_a_df` inputs.
+
+```{r, mod_pls}
+pls_grid <- expand.grid(ncomp = seq(1, 5, by = 1))
+
+set.seed(12345)
+mod_pls <- caret::train(outcome_2 ~ ., 
+                        method = "pls",
+                        preProcess = c("center", "scale"),
+                        tuneGrid = pls_grid,
+                        metric = roc_metric,
+                        trControl = my_ctrl,
+                        data = step_2_a_df)
+
+plot(mod_pls)
+```
+
+Check confusion matrix.
+
+```{r, mod_pls_confusionMatrix}
+confusionMatrix.train(mod_pls)
+```
+
+## Neural network
+
+Now we will try several more complex, non-linear methods (which can capture non-linear relationships between inputs).
+
+### Single hidden layer
+
+Fit a neural network regression model, specified by the default setting `linout = FALSE` (which we don't have to explicitly set). First use the default tuning parameter search grid.
+
+```{r, mod_nnet}
+set.seed(12345)
+mod_nnet <- caret::train(outcome_2 ~ .,
+                         method = "nnet",
+                         preProcess = c("center", "scale"),
+                         trace = FALSE,
+                         metric = roc_metric,
+                         trControl = my_ctrl,
+                         data = step_2_a_df)
+
+mod_nnet
+```
+
+Optimal tuning parameters found by `caret`'s `method="nnet"` are 5 hidden units (single layer), 0.1 decay.
+
+Now using a more refined search grid over the tuning parameters.
+
+```{r, nnet_grid}
+nnet_grid <- expand.grid(size = c(2, 4, 6, 8, 10, 12),
+                         decay = c(1e-4, 0.1, 0.5))
+```
+
+Fitting the `nnet` model using this more refined search grid. The grid search might take a few minutes.
+
+```{r, mod_nnet_b}
+set.seed(12345)
+mod_nnet_b <- caret::train(outcome_2 ~ .,
+                           method = "nnet",
+                           tuneGrid = nnet_grid,
+                           preProcess = c("center", "scale"),
+                           trace = FALSE,
+                           metric = roc_metric,
+                           trControl = my_ctrl,
+                           data = step_2_a_df)
+
+mod_nnet_b
+```
+
+It is observed that the neural network model favors `8` hidden units and weight decay `0.5`, with a corresponding AUC of `0.7298897`.
+
+Plot AUC against number of hidden units, colored distinctly by weight decay.
+
+```{r, mod_nnet_b_plot}
+plot(mod_nnet_b)
+```
+
+Check confusion matrix based on cross-validation results.
+
+```{r, mod_nnet_b_confusionMatrix}
+confusionMatrix.train(mod_nnet_b)
+```
+
+## Random forest
+
+Random forests have become a handy and convenient learning algorithm that has good predictive performance with "relatively little hyperparameter tuning". We will use `method = "rf"` that allows us to use `caret::train` as we have for all other models. By default, the random forest model creates 500 bagged tree models. The random forest model randomly selects, at each split, `mtry` features to consider for the splitting process. 
+
+We use a custom grid for different `mtry` values. Because we have 13 predictors, we will try `mtry = c(2, 4, 5, 7, 9, 11, 13)`. The code chunk below might take a few minutes to run to completion.
+
+```{r, mod_rf}
+rf_grid <- expand.grid(mtry = c(2, 4, 5, 7, 9, 11, 13))
+
+set.seed(12345)
+mod_rf <- caret::train(outcome_2 ~ .,
+                       method = "rf",
+                       importance = TRUE,
+                       tuneGrid = rf_grid,
+                       trControl = my_ctrl,
+                       metric = roc_metric,
+                       data = step_2_a_df)
+
+mod_rf
+```
+
+Check confusion matrix based on cross-validation results.
+
+```{r, mod_rf_confusionMatrix}
+confusionMatrix.train(mod_rf)
+```
+
+## Gradient boosted tree
+
+Gradient boosting machines (GBM) build shallow trees in sequence, with each tree "learning and improving on the previous one"; as opposed to random forests which build deep independent trees. When gradient boosted and tuned, these shallow trees collectively form one of the best predictive models.
+
+Set `method = "xgbTree"` in `caret::train`.
+
+```{r, mod_gbm}
+set.seed(12345)
+mod_xgb <- caret::train(outcome_2 ~ .,
+                        method = "xgbTree",
+                        verbose = FALSE,
+                        metric = roc_metric,
+                        trControl = my_ctrl,
+                        data = step_2_a_df)
+
+mod_xgb
+```
+
+The best model identified has 50 iterations (`nrounds`), complexity (`max_depth`) of 3, learning rate (`eta`) of 0.3, and minimum number of training set samples in a node to commence sampling (`subsample`) of 1.
+
+Check confusion matrix.
+
+```{r, mod_gbm_confusionMatrix}
+confusionMatrix.train(mod_xgb)
+```
+
+## Support Vector Machine
+
+The motivation for fitting a Support Vector Machine (SVM) is that SVMs have several advantages compared to other methods, as mentioned in the Hands-On Machine Learning with R book:
+
+- SVMs attempt to maximize generalizability;
+- SVMs are always guaranteed to find a global optimum since they are convex optimization problems, and don't get stuck in local optima unlike in neural networks;
+- SVMs are relatively robust to outliers by using a cost parameter;
+- SVMs are flexible in adapting to complex nonlinear decision boundaries using kernel functions, e.g. the radial basis kernel
+
+The basic idea of SVMs is dividing classes through hyperplanes; using a "kernel trick", as Dr Yurko puts it, to transform from the original space to a new feature space, on which it then tries to create linear separating boundaries between the classes.
+
+First, load `kernlab` library.
+
+```{r, load_kernlab}
+library(kernlab)
+```
+
+We will stick to the general rule of thumb to use a radial basis kernel in our `caret::train` call, using `method="svmRadial"`.
+
+First see what are the parameters to be learned:
+
+```{r, getModelInfo_svmRadial}
+caret::getModelInfo("svmRadial")$svmRadial$parameters
+```
+
+Now fit the model.
+
+```{r, mod_svm}
+set.seed(12345)
+mod_svm <- caret::train(outcome_2 ~ .,
+                        method = "svmRadial",
+                        preProcess = c("center", "scale"),
+                        metric = roc_metric,
+                        trControl = my_ctrl,
+                        data = step_2_a_df)
+
+mod_svm
+```
+
+Plot the results to see cross-validated `ROC` scores against different cost values.
+
+```{r, mod_svm_plot}
+plot(mod_svm)
+```
+
+Use a refined custom grid search, based on the identified best `sigma`.
+
+```{r, mod_svm_b}
+svm_grid <- expand.grid(sigma = mod_svm$bestTune$sigma * c(0.25, 0.5, 1, 2),
+                        C = c(0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0))
+
+set.seed(12345)
+mod_svm_b <- caret::train(outcome_2 ~ .,
+                          method = "svmRadial",
+                          preProcess = c("center", "scale"),
+                          tuneGrid = svm_grid,
+                          metric = roc_metric,
+                          trControl = my_ctrl,
+                          data = step_2_a_df)
+
+mod_svm_b$bestTune
+```
+
+Plot results.
+
+```{r, mod_svm_b_plot}
+ggplot(mod_svm_b) + theme_bw()
+```
+
+Clearly, the model corresponding to the red line, `sigma = 0.01756960` is the best model with the highest AUC at `Cost = 16.0`. 
+
+Check confusion matrix.
+
+```{r, mod_svm_b_confusionMatrix}
+confusionMatrix.train(mod_svm_b)
+```
+
+## Multivariate Adaptive Regression Splines
+
+The motivation for fitting a Multivariate Adaptive Regression Splines (MARS) model is to explore more nonlinear relationships between the inputs. MARS is capable of extending linear models to capture multiple nonlinear relationships by searching for and discovering nonlinearities and interactions in the data that will help maximize predictive accuracy.
+
+First, load `earth` library for MARS modeling.
+
+```{r, load_earth}
+library(earth)
+```
+
+Hands-On Maching Learning in R describes the inner workings of MARS. Instead of explicitly defining polynomial functions or natural spline functions ourselves, MARS provides a convenient approach to capture the nonlinear relationships in the data by assessing cutpoints, like step functions. The procedure assesses each data point for each input as a knot and creates a linear regression model with the candidate feature(s). 
+
+To help in the tuning of this procedure, we can specify tuning parameters such as the maximum degree of interactions, `degree`, and the number of terms retained in the final model, `nprune`, in a tuning grid to be passed into the `caret::train` call. Since there is rarely any benefit in assessing greater than triplet interactions, we choose `degree = 1:3`. We also start out with 10 evenly spaced values and intend to zoom in when we later find an approximate optimal solution and there is cause to.
+
+```{r, mars_grid}
+mars_grid <- expand.grid(degree = 1:3,
+                         nprune = seq(2, 100, length.out = 10) %>% floor())
+
+mars_grid %>% head()
+```
+
+We will use `caret::train`, as in the previous sections. The grid search might take a few minutes.
+
+```{r, mod_mars}
+set.seed(12345)
+mod_mars <- caret::train(outcome_2 ~ .,
+                         method = "earth",
+                         tuneGrid = mars_grid,
+                         metric = roc_metric,
+                         trControl = my_ctrl,
+                         data = step_2_a_df)
+
+mod_mars$bestTune
+```
+
+Plot the model.
+
+```{r, mod_mars_plot}
+ggplot(mod_mars)
+```
+
+Here, because the optimal `ROC` values stay constant beyond roughly `nprune = 23` terms, there is no need to adjust to a more specific tuning grid.
+
+```{r, mod_mars_resample_stats}
+mod_mars$resample %>% summary()
+```
+
+Check confusion matrix.
+
+```{r, mod_mars_confusionMatrix}
+confusionMatrix.train(mod_mars)
+```
+
+## Comparing methods
+
+### ROC comparison
+
+Now that we have fit all of the models, we can compare the cross-validation hold-out set performance metrics. We first compile all of the “resample” results together with the resamples() function.
+
+```{r, all_step2a_mods_resample}
+iv_results <- resamples(list(glm = mod_glm,
+                             glmnet_2way = mod_glmnet_2_b,
+                             glmnet_3way = mod_glmnet_3_b,
+                             nnet = mod_nnet_b,
+                             rf = mod_rf,
+                             xgb = mod_xgb,
+                             svm = mod_svm_b,
+                             mars = mod_mars,
+                             pls = mod_pls))
+```
+
+Then we visually compare the performance metrics.
+
+```{r, iv_results_dotplot}
+dotplot(iv_results)
+
+dotplot(iv_results, metric = "ROC")
+dotplot(iv_results, metric = "Sens")
+dotplot(iv_results, metric = "Spec")
+```
+
+Based on AUC, `rf` is the best model; although `rf`, `nnet`, `xgb`, `mars` seem to be close to each other in terms of performance. While `rf` does the best in terms of AUC and `Sens`, it does not fare as well in `Spec`.
+
+Assemble the ROC curves for comparison. First, identify the best tuned model and combine the cross-validation hold-out set predictions.
+
+```{r, assemble_roc}
+cv_pred_results <- mod_glm$pred %>% tbl_df() %>% 
+  filter(parameter == mod_glm$bestTune$parameter) %>% 
+  select(pred, obs, Fail, Pass, rowIndex, Resample) %>% 
+  mutate(model_name = "glm") %>% 
+  bind_rows(mod_glmnet_2_b$pred %>% tbl_df() %>% 
+              filter(alpha %in% mod_glmnet_2_b$bestTune$alpha,
+                     lambda %in% mod_glmnet_2_b$bestTune$lambda) %>% 
+              select(pred, obs, Fail, Pass, rowIndex, Resample) %>% 
+              mutate(model_name = "glmnet_2_b")) %>% 
+  bind_rows(mod_glmnet_3_b$pred %>% tbl_df() %>% 
+              filter(alpha %in% mod_glmnet_3_b$bestTune$alpha,
+                     lambda %in% mod_glmnet_3_b$bestTune$lambda) %>% 
+              select(pred, obs, Fail, Pass, rowIndex, Resample) %>% 
+              mutate(model_name = "glmnet_3_b")) %>% 
+  bind_rows(mod_pls$pred %>% tbl_df() %>% 
+              filter(ncomp %in% mod_pls$bestTune$ncomp) %>% 
+              select(pred, obs, Fail, Pass, rowIndex, Resample) %>% 
+              mutate(model_name = "pls")) %>% 
+  bind_rows(mod_nnet_b$pred %>% tbl_df() %>% 
+              filter(size == mod_nnet_b$bestTune$size,
+                     decay == mod_nnet_b$bestTune$decay) %>% 
+              select(pred, obs, Fail, Pass, rowIndex, Resample) %>% 
+              mutate(model_name = "nnet")) %>% 
+  bind_rows(mod_rf$pred %>% tbl_df() %>% 
+              filter(mtry == mod_rf$bestTune$mtry) %>% 
+              select(pred, obs, Fail, Pass, rowIndex, Resample) %>% 
+              mutate(model_name = "rf")) %>% 
+  bind_rows(mod_xgb$pred %>% tbl_df() %>% 
+              filter(nrounds == mod_xgb$bestTune$nrounds,
+                     max_depth == mod_xgb$bestTune$max_depth,
+                     eta %in% mod_xgb$bestTune$eta,
+                     gamma %in% mod_xgb$bestTune$gamma,
+                     colsample_bytree %in% mod_xgb$bestTune$colsample_bytree,
+                     min_child_weight == mod_xgb$bestTune$min_child_weight,
+                     subsample == mod_xgb$bestTune$subsample) %>% 
+              select(pred, obs, Fail, Pass, rowIndex, Resample) %>% 
+              mutate(model_name = "xgb")) %>% 
+  bind_rows(mod_svm_b$pred %>% tbl_df() %>% 
+              filter(sigma %in% mod_svm_b$bestTune$sigma,
+                     C %in% mod_svm_b$bestTune$C) %>% 
+              select(pred, obs, Fail, Pass, rowIndex, Resample) %>% 
+              mutate(model_name = "svm")) %>% 
+  bind_rows(mod_mars$pred %>% tbl_df() %>% 
+              filter(nprune == mod_mars$bestTune$nprune,
+                     degree == mod_mars$bestTune$degree) %>% 
+              select(pred, obs, Fail, Pass, rowIndex, Resample) %>% 
+              mutate(model_name = "mars"))
+  
+### nrounds = 50, max_depth = 2, eta = 0.3, gamma = 0, 
+### colsample_bytree = 0.8, min_child_weight = 1 and subsample = 1.
+```
+
+Load `plotROC` to plot ROC curves.
+
+```{r, load_plotROC}
+library(plotROC)
+```
+
+Visualize the ROC curves for each fold-resample broken up by the methods.
+
+```{r, visualize_roc_resample}
+cv_pred_results %>% 
+  ggplot(mapping = aes(m = Fail,
+                       d = ifelse(obs == "Fail",
+                                  1, 
+                                  0))) +
+  geom_roc(cutoffs.at = 0.5,
+           mapping = aes(color = Resample)) +
+  geom_roc(cutoffs.at = 0.5) +
+  coord_equal() +
+  facet_wrap(~model_name) +
+  style_roc()
+```
+
+The black line is the ROC curve averaged over all folds and repeats. Examine `rf` and `mars` models more closely since they seem to be the best performing.
+
+```{r, roc_resample_rf}
+cv_pred_results %>% 
+  filter(model_name %in% c("rf", "mars")) %>% 
+  ggplot(mapping = aes(m = Fail,
+                       d = ifelse(obs == "Fail",
+                                  1, 
+                                  0))) +
+  geom_roc(cutoffs.at = 0.5,
+           mapping = aes(color = Resample)) +
+  geom_roc(cutoffs.at = 0.5) +
+  coord_equal() +
+  facet_wrap(~model_name) +
+  style_roc()
+```
+
+Compare cross-validation averaged ROC curves.
+
+```{r, compare_roc_cv}
+cv_pred_results %>% 
+  ggplot(mapping = aes(m = Fail,
+                       d = ifelse(obs == "Fail",
+                                  1, 
+                                  0),
+                       color = model_name)) +
+  geom_roc(cutoffs.at = 0.5) +
+  coord_equal() +
+  style_roc() +
+  ggthemes::scale_color_calc()
+```
+
+As we expected, `rf`, `nnet`, `xgb` and `mars` all perform comparatively well.
+
+Consider the calibration curves associated with the cross-validation hold-out sets for the above four models, and a linear model `glmnet`.
+
+```{r}
+rf_test_pred_good <- mod_rf$pred %>% tbl_df() %>% 
+              filter(mtry == mod_rf$bestTune$mtry) %>% 
+              select(obs, Fail, rowIndex, Resample)
+
+nnet_test_pred_good <- mod_nnet_b$pred %>% tbl_df() %>% 
+              filter(size == mod_nnet_b$bestTune$size,
+                     decay == mod_nnet_b$bestTune$decay) %>% 
+              select(obs, Fail, rowIndex, Resample)
+
+xgb_test_pred_good <- mod_xgb$pred %>% tbl_df() %>% 
+              filter(nrounds == mod_xgb$bestTune$nrounds,
+                     max_depth == mod_xgb$bestTune$max_depth,
+                     eta %in% mod_xgb$bestTune$eta,
+                     gamma %in% mod_xgb$bestTune$gamma,
+                     colsample_bytree %in% mod_xgb$bestTune$colsample_bytree,
+                     min_child_weight == mod_xgb$bestTune$min_child_weight,
+                     subsample == mod_xgb$bestTune$subsample) %>% 
+              select(obs, Fail, rowIndex, Resample)
+
+mars_test_pred_good <- mod_mars$pred %>% tbl_df() %>% 
+              filter(nprune == mod_mars$bestTune$nprune,
+                     degree == mod_mars$bestTune$degree) %>% 
+              select(obs, Fail, rowIndex, Resample)
+
+glmnet_3_b_test_pred_good <- mod_glmnet_3_b$pred %>% tbl_df() %>% 
+              filter(alpha %in% mod_glmnet_3_b$bestTune$alpha,
+                     lambda %in% mod_glmnet_3_b$bestTune$lambda) %>% 
+              select(obs, Fail, rowIndex, Resample)
+
+cal_holdout_preds <- rf_test_pred_good %>% rename(rf = Fail) %>% 
+  left_join(nnet_test_pred_good %>% rename(nnet = Fail),
+            by = c("obs", "rowIndex", "Resample")) %>% 
+  left_join(xgb_test_pred_good %>% rename(xgb = Fail),
+            by = c("obs", "rowIndex", "Resample")) %>% 
+  left_join(mars_test_pred_good %>% rename(mars = Fail),
+            by = c("obs", "rowIndex", "Resample")) %>% 
+  left_join(glmnet_3_b_test_pred_good %>% rename(glmnet = Fail),
+            by = c("obs", "rowIndex", "Resample")) %>% 
+  select(outcome_2 = obs, rf, nnet, xgb, mars, glmnet)
+```
+
+Generate calibration curves.
+
+```{r, gen_calibration_curves_four_models}
+cal_object <- calibration(outcome_2 ~ rf + nnet + xgb + mars + glmnet,
+                          data = cal_holdout_preds,
+                          cuts = 10)
+
+ggplot(cal_object) + theme_bw() + theme(legend.position = "top")
+```
+
+`glmnet` seems to not be so well calibrated.
+
+```{r, gen_calibration_curves_four_models_fewer_bins}
+cal_object <- calibration(outcome_2 ~ rf + nnet + xgb + mars + glmnet,
+                          data = cal_holdout_preds,
+                          cuts = 5)
+
+ggplot(cal_object) + theme_bw() + theme(legend.position = "top")
+```
+
+### Accuracy comparison
+
+Based on `Accuracy`, the result for best model appear to be slightly different, although the previously identified four best models are still the same.
+
+```{r, accuracy_comparison}
+calc_accuracy <- function(model) {
+  cf <- confusionMatrix.train(model)
+  
+  return( (cf$table[1,1] + cf$table[2,2]) / 100 )
+}
+
+models <- list(glm = mod_glm, glmnet_2way = mod_glmnet_2_b, glmnet_3way = mod_glmnet_3_b, nnet = mod_nnet_b, rf = mod_rf, xgb = mod_xgb, pls = mod_pls, svm = mod_svm, mars = mod_mars)
+
+accuracy_results <- purrr::map_dbl(models, calc_accuracy)
+
+accuracy_results %>% sort(decreasing = TRUE)
+```
+
+`rf` is the best performing model in terms of `Accuracy`.
+
+### Variable importance rankings
+
+Complex non-linear models can be difficult to interpret. We can consider ranking the relative importance of the input variables in the `step_2_a_df` dataset. Plot variable importance based on `rf` model.
+
+```{r, varImp_rf}
+plot(varImp(mod_rf))
+```
+
+Plot variable importance based on `xgb` model.
+
+```{r, varImp_xgb}
+plot(varImp(mod_xgb))
+```
+
+`x07` and `x08` seem to be the two most important inputs.
+
+<!-- Manually extract the results to make a custom figure. -->
+
+<!-- ```{r, iii_results_ggplot} -->
+<!-- iii_results_lf <-  -->
+<!--   as.data.frame(iii_results, metric = "ROC") %>% tibble::as_tibble() %>%  -->
+<!--     mutate(metric_name = "ROC") %>%  -->
+<!--   bind_rows(as.data.frame(iii_results, metric = "Sens") %>% tibble::as_tibble() %>%  -->
+<!--     mutate(metric_name = "Sens")) %>%  -->
+<!--   bind_rows(as.data.frame(iii_results, metric = "Spec") %>% tibble::as_tibble() %>%  -->
+<!--     mutate(metric_name = "Spec")) %>%  -->
+<!--   tidyr::gather(key = "model_name", value = "metric_value", -Resample, -metric_name) -->
+
+<!-- iii_results_lf %>%  -->
+<!--   ggplot(mapping = aes(x = model_name, y = metric_value)) + -->
+<!--   geom_boxplot() + -->
+<!--   stat_summary(fun.data = "mean_se", -->
+<!--                color = "red", -->
+<!--                fun.args = list(mult = 1)) + -->
+<!--   coord_flip() + -->
+<!--   facet_grid(. ~ metric_name, scales = "free_x") + -->
+<!--   theme_bw() -->
+<!-- ``` -->
+
+<!-- ```{r,iii_results_corr} -->
+<!-- as.data.frame(iii_results, metric = "ROC") %>%  -->
+<!--   GGally::ggpairs(columns = 1:9) # 9 models -->
+<!-- ``` -->
+
+## Saving
+
+```{r, save_data}
+# Rename models list item names
+names(models) <- c("iv_glm", "iv_glmnet_2way", "iv_glmnet_3way", "iv_nnet", "iv_rf", "iv_xgb", "iv_pls", "iv_svm", "iv_mars")
+# Save models list
+models %>% readr::write_rds("iv_models.rds")
+```

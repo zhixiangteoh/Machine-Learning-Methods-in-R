@@ -1,0 +1,173 @@
+---
+title: "CS 1675 Final Project"
+subtitle: "Part iiB Regression models"
+author: "Teoh Zhixiang"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load packages and data
+
+```{r, load_packages}
+library(tidyverse)
+```
+
+
+```{r, load_data}
+df <- readr::read_rds("df.rds")
+step_1_df <- readr::read_rds("step_1_df.rds")
+step_2_a_df <- readr::read_rds("step_2_a_df.rds")
+step_2_b_df <- readr::read_rds("step_2_b_df.rds")
+mod_lm_basis <- readr::read_rds("mod_lm_basis.rds")
+mod_lm_step1 <- readr::read_rds("mod_lm_step1.rds")
+```
+
+## Overview
+
+i. Exploration
+ii. **Regression models**
+iii. Binary classification option b
+iv. Binary classification option a
+v. Interpretation and optimization
+
+This R Markdown file tackles part iiB, specifically using Bayesian linear models to fit the two linear models we previously fit with `lm()`, in part iiA.
+
+iiA. Regression models - `lm()`
+**iiB. Regression models - Bayesian**
+iiC. Regression models - Models with Resampling
+
+We will use the `rstanarm` package's `stan_lm()` function to fit full Bayesian linear models, with syntax similar to the `lm()` function.
+
+```{r, load_rstanarm, eval=TRUE}
+library(rstanarm)
+```
+
+## Regression models - Bayesian
+
+### Fitting `response_1` to all step 1 inputs
+
+Let's first fit a linear model for `response_1`, using a linear relationship with all step 1 inputs, as we did in part iiA.
+
+First, see frequentist estimated coefficients using `lm()` model:
+
+```{r, freq_mod_lm_step1_coef}
+round(coef(mod_lm_step1), 3)
+```
+
+Use `stan_lm()` to fit Bayesian linear model:
+
+```{r, mod_stanlm_step1}
+post_stanlm_step1 <- stan_lm(response_1 ~ ., 
+                            data = step_1_df,
+                            prior = R2(what = "mode", location = 0.5),
+                            seed = 12345)
+
+post_stanlm_step1
+
+round(coef(post_stanlm_step1), 3)
+```
+
+### Fitting `response_1` to basis function
+
+Let's fit a linear model for `response_1`, using a linear relationship with the basis function we defined previously in part iiA.
+
+First, see frequentist estimated coefficients using `lm()` model:
+
+```{r, freq_mod_lm_basis_coef}
+round(coef(mod_lm_basis), 3)
+```
+
+With `stan_lm()` the linear model is fit using the formula interface, specifying a prior mode for R-squared: 
+
+```{r, mod_stanlm_basis}
+post_stanlm_basis <- stan_lm(response_1 ~ xA + xB*(splines::ns(x01, df = 2) + splines::ns(x02, df = 2) + splines::ns(x03, df = 2)), 
+                             data = step_1_df,
+                             prior = R2(what = "mode", location = 0.5),
+                             iter = 4000,
+                             seed = 12345)
+
+post_stanlm_basis
+
+round(coef(post_stanlm_basis), 3)
+```
+
+### Comparing Bayesian linear models
+
+```{r, compare_models}
+loo_post_stanlm_basis <- loo(post_stanlm_basis)
+loo_post_stanlm_step1 <- loo(post_stanlm_step1)
+loo_compare(loo_post_stanlm_basis, loo_post_stanlm_step1)
+```
+
+The Bayesian linear model model using the basis function is the preferred and better one, for its lower LOO Information Criterion (LOOIC) that estimates the expected log predicted density (ELPD) for a new dataset (out-of-sample data). The LOOIC is a Bayesian-equivalent to the Akaike Information Criterion (AIC), that integrates over uncertainty in the parameters of the posterior distribution.
+
+### Visualize posterior distributions on coefficients for basis model
+
+First visualize the coefficient estimates, similar to in part iiA.
+
+```{r, post_stanlm_coef_plot}
+plot(post_stanlm_basis)  +
+  geom_vline(xintercept = 0, color = "grey", linetype = "dashed", size = 1.)
+```
+
+Next we plot the coefficient distributions.
+
+```{r, post_stanlm_coef_dist}
+as.data.frame(post_stanlm_basis) %>% tibble::as_tibble() %>% 
+  select(names(post_stanlm_basis$coefficients)) %>% 
+  tibble::rowid_to_column("post_id") %>% 
+  tidyr::gather(key = "key", value = "value", -post_id) %>% 
+  ggplot(mapping = aes(x = value)) +
+  geom_histogram(bins = 55) +
+  facet_wrap(~key, scales = "free") +
+  theme_bw() +
+  theme(axis.text.y = element_blank())
+```
+
+### Comparing uncertainty in noise
+
+Display the maximum likelihood estimate of the noise, or residual standard error, $\sigma$ obtained using `lm()` for the basis model:
+
+```{r, basis_lm_noise}
+SSE <- sum(mod_lm_basis$residuals**2)
+n <- length(mod_lm_basis$residuals)
+
+mle_sigma <- sqrt(SSE/(n - length(mod_lm_basis$coefficients)))
+
+mle_sigma
+```
+
+Display the posterior uncertainty on $\sigma$:
+
+```{r, basis_stan_lm_noise}
+# noise quantiles
+as.data.frame(post_stanlm_basis) %>% tibble::as_tibble() %>% 
+  select(sigma) %>% 
+  pull() %>% 
+  quantile(c(0.05, 0.5, 0.95))
+
+# noise 95% posterior interval
+posterior_interval(post_stanlm_basis, prob = 0.95, pars = "sigma")
+```
+
+Visualize the posterior distribution on $\sigma$, indicating MLE of $\sigma$ from part iiA:
+
+```{r, basis_stan_lm_noise_post_dist}
+as.data.frame(post_stanlm_basis) %>% tibble::as_tibble() %>% 
+  ggplot(mapping = aes(x = sigma)) +
+  geom_histogram(bins = 55) +
+  geom_vline(xintercept = mle_sigma, 
+             color = "red", linetype = "dashed", size = 1.1)
+```
+
+The MLE of $\sigma$ falls within the 95% posterior uncertainty interval, near the mode.
+
+## Saving
+
+```{r, save_data}
+post_stanlm_basis %>% readr::write_rds("post_stanlm_basis.rds")
+post_stanlm_step1 %>% readr::write_rds("post_stanlm_step1.rds")
+```

@@ -1,0 +1,168 @@
+---
+title: "CS 1675 Final Project"
+subtitle: "Part iiA Regression models"
+author: "Teoh Zhixiang"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load packages and data
+
+```{r, load_packages}
+library(tidyverse)
+```
+
+
+```{r, load_data}
+df <- readr::read_rds("df.rds")
+step_1_df <- readr::read_rds("step_1_df.rds")
+step_2_a_df <- readr::read_rds("step_2_a_df.rds")
+step_2_b_df <- readr::read_rds("step_2_b_df.rds")
+```
+
+## Overview
+
+i. Exploration
+ii. **Regression models**
+iii. Binary classification option b
+iv. Binary classification option a
+v. Interpretation and optimization
+
+This investigation is divided into `5` main parts, of which we have completed the first on exploratory data analysis. Although our ultimate goal is to fit the data to more comprehensive Bayesian models, we will first focus on getting a feel for the behavior of `response_1` as a function of the step 1 inputs, using `lm()`.
+
+Therefore, part ii is split into two sub-parts, iiA and iiB, as such:
+
+**iiA. Regression models - `lm()`**
+iiB. Regression models - Bayesian
+iiC. Regression models - Models with Resampling
+
+This R Markdown file tackles part iiA, specifically using `lm()` to fit several linear models to the dataset.
+
+## Regression models - `lm()`
+
+### Fitting `response_1` to discrete inputs
+
+Let's fit a linear model for `response_1`, using a linear relationship with the discrete inputs, `xA` and `xB`, as additive terms. That is, we want to build a model for estimating `response_1` based on the discrete inputs `xA` and `xB`:
+
+$$
+\mathrm{response\_1} = b_0 + b_1\mathrm{xA} + b_2\mathrm{xB}
+$$
+
+With `lm()` the linear model is easy to fit using the formula interface: 
+
+```{r, response_1_discrete_inputs_lm}
+mod_lm_discrete <- lm(response_1 ~ xA + xB, step_1_df)
+```
+
+Summarize the model results with the `summary()` function.  
+
+```{r, show_mod_lm_discrete_summary}
+mod_lm_discrete %>% summary()
+```
+
+From above, the p-value of the F-statistic is < 2.2e-16, which is significant; it is likely that at least one or more of the discrete variables are significantly related to `response_1`.
+
+From the coefficients table, `xA` seems to have the lowest absolute t-value, and lowest effect on `response_1`, given that it has the lowest coefficient `Estimate`. Additionally, `xAA2` has the highest p-value for the t test. This tells us that `xA` is most probably the less significant input. 
+
+Computing and storing the confidence interval of the `xB` coefficients.
+
+```{r, mod_lm_discrete_confint}
+mod_lm_discrete_confint <- mod_lm_discrete %>% confint()
+```
+
+### Fitting `response_1` to continuous inputs
+
+Next, we fit a linear model for `response_1` using a linear relationship with the continuous step 1 inputs, `x01` to `x06`:
+
+```{r, response_1_cont_inputs_lm}
+mod_lm_cont <- lm(response_1 ~ . -xA -xB, step_1_df)
+```
+
+Summarize the model results with the `summary()` function.  
+
+```{r, show_mod_lm_cont_summary}
+mod_lm_cont %>% summary()
+```
+
+From the above result, `x01`, `x02`, and `x03` are the most significant continuous inputs; observed from their lowest p-values, highest t-statistics, which are also indicated by the `***` indicated on their respective rows on the coefficient table. 
+
+Computing and storing the confidence interval of the continuous coefficients.
+
+```{r, mod_lm_cont_confint}
+mod_lm_cont %>% confint()
+```
+
+### Fitting `response_1` to all step 1 inputs
+
+Now, we want to fit a linear model for `response_1` using a linear relationship with the all step 1 inputs, `x01` to `x06`, as additive terms:
+
+```{r, response_1_step1_lm}
+mod_lm_step1 <- lm(response_1 ~ ., step_1_df)
+```
+
+Summarize the model results with the `summary()` function.  
+
+```{r, show_mod_lm_step1_summary}
+mod_lm_step1 %>% summary()
+```
+
+### Fitting `response_1` to a basis function
+
+Finally, let's define a basis function of the inputs on which to fit to fit a linear model, using `lm()`. Considering the most significant inputs from fitting all step 1 inputs, and defining natural spline functions for the continuous inputs with an appropriate degree of freedom, then modeling interactions among all the most significant inputs, we get:
+
+```{r, response_1_basis_lm}
+mod_lm_basis <- lm(response_1 ~ xA + xB*(splines::ns(x01, df = 2) + splines::ns(x02, df = 2) + splines::ns(x03, df = 2)), step_1_df)
+```
+
+Summarize the model results with the `summary()` function.  
+
+```{r, show_mod_lm_basis_summary}
+mod_lm_basis %>% summary()
+```
+
+### Comparing `lm()` models
+
+The linear model fit using the basis function is the best. This model is chosen because it has the highest adjusted R-squared value of `0.8896` which is closest to 1 than all 3 other models. Also, it has the lowest residual standard error of `1.796`.
+
+The second best model is the linear model fit using all step 1 inputs.
+
+### Visualization
+
+Load in package `coefplot`:
+
+```{r, load_coefplot, eval=TRUE}
+library(coefplot)
+```
+
+Compute confidence intervals for best and second best models:
+
+```{r, mod_lm_confint}
+mod_lm_basis_confint <- mod_lm_basis %>% confint()
+mod_lm_basis_confint
+mod_lm_step1_confint <- mod_lm_step1 %>% confint()
+mod_lm_step1_confint
+```
+
+Plot model coefficients for best model:
+
+```{r, coefplot_mod_lm_basis}
+coefplot(mod_lm_basis, innerCI = 2, pointSize = 2)
+```
+
+Plot model coefficients for second best model:
+
+```{r, coefplot_mod_lm_step1}
+coefplot(mod_lm_step1, innerCI = 2, pointSize = 2)
+```
+
+In general, more coefficients of the basis model are further away from 0 than the all step 1 inputs model. For example, coefficients of terms containing `x01` for the basis model are both negative and positive, while `x01` term in all step 1 inputs model is slightly negative, but much closer to 0. This explains the higher R-squared for the basis model. For both models, the 95% confidence intervals for the coefficients are small.
+
+## Saving
+
+```{r, save_data}
+mod_lm_basis %>% readr::write_rds("mod_lm_basis.rds")
+mod_lm_step1 %>% readr::write_rds("mod_lm_step1.rds")
+```
